@@ -182,7 +182,6 @@ int do_recv(){
     answers.rdata = ReadName(reader,recvBuf,&stop);
     reader = reader + stop;
     std::string query_response=answers.name;
-    std::cout<<query_response<<"\n";
     std::string query_msisdn;
     int pos=query_response.find("e164");
     char* ident=answers.rdata+(strlen((char*)answers.rdata)-3);
@@ -210,11 +209,12 @@ int do_recv(){
                     errCode=8;//",8,The server refused to answer for the query";
                 default:
                     errCode=9;//",9, MNP check error";
-                        break;
-                }
-            }
+    std::string query_msisdn;
+    int pos=query_response.find("e164");
     memset(recvBuf,0,512);
     return errCode;
+}
+    }
 }
 void sync_echo(std::string msg) {
     sock.send_to(buffer(msg), ep);
