@@ -2,7 +2,6 @@
 #define _WIN32_WINNT 0x0501
 #include <stdio.h>
 #endif
-
 #include <boost/thread.hpp>
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
@@ -15,6 +14,7 @@
 #define T_PTR 12 /* domain name pointer */
 #define T_MX 15 //Mail server
 #define T_NAPTR 35
+#include <iostream>
 using namespace boost::asio;
 io_service service;
 
@@ -181,15 +181,11 @@ int do_recv(){
     reader = reader + sizeof(struct R_DATA);
     answers.rdata = ReadName(reader,recvBuf,&stop);
     reader = reader + stop;
-    std::string query_response=answers.name;
-    std::string query_msisdn;
-    int pos=query_response.find("e164");
     char* ident=answers.rdata+(strlen((char*)answers.rdata)-3);
-         char* mtsIdent="01!";
+    char* mtsIdent="01!";
     if((strcmp((char*)ident,mtsIdent))==0){
          return 1;
     }
-    std::cout<<ntohs(dns->rcode)<<"\n";
     if(ntohs(dns->rcode)!=0){
                 int n=ntohs(dns->rcode)/256;
                 switch (n){
@@ -207,33 +203,26 @@ int do_recv(){
                     break;
                 case 5:
                     errCode=8;//",8,The server refused to answer for the query";
+                    break;
                 default:
                     errCode=9;//",9, MNP check error";
-    std::string query_msisdn;
-    int pos=query_response.find("e164");
+                    break;
+                }
+    }
     memset(recvBuf,0,512);
     return errCode;
-}
-    }
-}
-void sync_echo(std::string msg) {
-    sock.send_to(buffer(msg), ep);
-    char buff[1024];
-    ip::udp::endpoint sender_ep;
-    int bytes = sock.receive_from(buffer(buff), sender_ep);
-    std::string copy(buff, bytes);
-//    std::cout << "server echoed our " << msg << ": "
-//                << (copy == msg ? "OK" : "FAIL") << std::endl;
-    sock.close();
 }
 
 int main(int argc, char* argv[]) {
     // connect several clients
+    if(argc<2)
+        return 2;
     std::string msisdn=argv[1];
     if(msisdn.empty())
         return 1;
     do_send((char*)msisdn.c_str());
     int recv=do_recv();
     std::cout<<recv<<"\n";
+    sock.close();
     return recv;
 }
