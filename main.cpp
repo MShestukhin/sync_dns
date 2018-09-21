@@ -1,7 +1,4 @@
-#ifdef WIN32
-#define _WIN32_WINNT 0x0501
-#include <stdio.h>
-#endif
+
 #include <boost/thread.hpp>
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
@@ -15,11 +12,85 @@
 #define T_MX 15 //Mail server
 #define T_NAPTR 35
 #include <iostream>
+#include <fstream>
+#include "includes/libconfig.h++"
+#include "includes/occi.h"
+#include "includes/ocilib.h"
+#include <fstream>
+#include <string>
 using namespace boost::asio;
+using namespace std;
 io_service service;
+string MNP_host;
+vector<string> split(string str,const char * delimitr)
+{
+    std::vector<string> v;
+    char* chars_array = strtok((char*)str.c_str(), delimitr);
+    while(chars_array)
+    {
+        v.push_back(chars_array);
+        chars_array = strtok(NULL, delimitr);
+    }
+    return v;
+}
 
-ip::udp::endpoint ep( ip::address::from_string("10.241.30.170"), 53);
-ip::udp::socket sock(service, ip::udp::endpoint(ip::udp::v4(), 0) );
+
+bool contains(std::string s_cel,std::string s_find){
+    if (s_cel.find(s_find) != std::string::npos) {
+        return true;
+    }
+    return false;
+};
+
+void init()
+{
+    ifstream file;
+    file.open("/home/bic/bic-ftp/etc/bic-ftp.conf");
+    string base="base";
+    string user="user ";
+    string pswd="pswd";
+    string mnp_host="MNP_host";
+    while(file) {
+      std::string str;
+      std::getline(file, str);
+      if(contains(str,base)){
+          str.erase(std::remove(str.begin(),str.end(),' '),str.end());
+          base.clear();
+          base=split(str,"=").at(1);
+      }
+      if(contains(str,user)){
+          str.erase(std::remove(str.begin(),str.end(),' '),str.end());
+          user.clear();
+          user=split(str,"=").at(1);
+      }
+      if(contains(str,pswd)){
+          str.erase(std::remove(str.begin(),str.end(),' '),str.end());
+          pswd.clear();
+          pswd=split(str,"=").at(1);
+      }
+    }
+    OCI_Connection* cn;
+    OCI_Statement* st;
+    OCI_Resultset*rs;
+    if(!OCI_Initialize(NULL, NULL, OCI_ENV_DEFAULT)){
+        std::cout<< "EXIT_FAILURE";
+    }
+    cn = OCI_ConnectionCreate(base.c_str(), user.c_str(), pswd.c_str(), OCI_SESSION_DEFAULT);
+    st = OCI_StatementCreate(cn);
+    st = OCI_StatementCreate(cn);
+    OCI_Prepare(st,"select code, val from SETTINGS where code='mnp_dns_server'");
+    OCI_Execute(st);
+    rs = OCI_GetResultset(st);
+    while(OCI_FetchNext(rs))
+    {
+        char str[100];
+        sprintf(str,OCI_GetString(rs,2));
+        MNP_host=str;
+    }
+    OCI_Cleanup();
+//    file.close();
+
+}
 struct DNS_HEADER
 {
     unsigned short id; // identification number
@@ -96,7 +167,7 @@ void ChangetoDnsNameFormat(char *dns, char *host){
 
 }
 
-void do_send(char* MSISDN){
+void do_send(char* MSISDN,ip::udp::socket& sock){
     char sendBuf[512];
     char *qname;
     char* host;
@@ -135,6 +206,7 @@ void do_send(char* MSISDN){
     qinfo->qtype = htons(T_NAPTR);
     qinfo->qclass = htons(1);
     i=1;
+    ip::udp::endpoint ep( ip::address::from_string(MNP_host.c_str()), 53);
     sock.send_to(buffer(sendBuf), ep);
 }
 
@@ -162,7 +234,7 @@ char* ReadName(char* reader,char* buffer,int* count)
         return name;
 }
 
-int do_recv(){
+int do_recv(ip::udp::socket& sock){
     char recvBuf[1024];
     ip::udp::endpoint sender_ep;
     int bytes = 0;
@@ -187,27 +259,27 @@ int do_recv(){
          return 1;
     }
     if(ntohs(dns->rcode)!=0){
-                int n=ntohs(dns->rcode)/256;
-                switch (n){
-                case 1:
-                    errCode=8;//",8,Query Format Error";
-                        break;
-                case 2:
-                    errCode=8;//",8,Server failed to complete the DNS request";
-                        break;
-                case 3:
-                    errCode=8;//",8,MSISDN does not exist";
-                        break;
-                case 4:
-                    errCode=8;//",8,Function not implemented";
-                    break;
-                case 5:
-                    errCode=8;//",8,The server refused to answer for the query";
-                    break;
-                default:
-                    errCode=9;//",9, MNP check error";
-                    break;
-                }
+        int n=ntohs(dns->rcode)/256;
+        switch (n){
+        case 1:
+            errCode=8;//",8,Query Format Error";
+                break;
+        case 2:
+            errCode=8;//",8,Server failed to complete the DNS request";
+                break;
+        case 3:
+            errCode=8;//",8,MSISDN does not exist";
+                break;
+        case 4:
+            errCode=8;//",8,Function not implemented";
+            break;
+        case 5:
+            errCode=8;//",8,The server refused to answer for the query";
+            break;
+        default:
+            errCode=9;//",9, MNP check error";
+            break;
+        }
     }
     memset(recvBuf,0,512);
     return errCode;
@@ -215,13 +287,15 @@ int do_recv(){
 
 int main(int argc, char* argv[]) {
     // connect several clients
+    init();
+    ip::udp::socket sock(service, ip::udp::endpoint(ip::udp::v4(), 0) );
     if(argc<2)
         return 2;
     std::string msisdn=argv[1];
     if(msisdn.empty())
         return 1;
-    do_send((char*)msisdn.c_str());
-    int recv=do_recv();
+    do_send((char*)msisdn.c_str(),sock);
+    int recv=do_recv(sock);
     std::cout<<recv<<"\n";
     sock.close();
     return recv;
