@@ -21,7 +21,7 @@
 using namespace boost::asio;
 using namespace std;
 io_service service;
-string MNP_host;
+string MNP_host="";
 vector<string> split(string str,const char * delimitr)
 {
     std::vector<string> v;
@@ -45,7 +45,8 @@ bool contains(std::string s_cel,std::string s_find){
 void init()
 {
     ifstream file;
-    file.open("/home/bic/bic-ftp/etc/bic-ftp.conf");
+    file.open("./etc/bic-soap.conf");
+    //file.open("./bic-ftp.conf");
     string base="base";
     string user="user ";
     string pswd="pswd";
@@ -68,6 +69,12 @@ void init()
           pswd.clear();
           pswd=split(str,"=").at(1);
       }
+      if(contains(str,mnp_host)){
+          str.erase(std::remove(str.begin(),str.end(),' '),str.end());
+          mnp_host.clear();
+          mnp_host=split(str,"=").at(1);
+          MNP_host=mnp_host;
+      }
     }
     OCI_Connection* cn;
     OCI_Statement* st;
@@ -85,10 +92,11 @@ void init()
     {
         char str[100];
         sprintf(str,OCI_GetString(rs,2));
-        MNP_host=str;
+        if(MNP_host=="")
+            MNP_host=str;
     }
     OCI_Cleanup();
-//    file.close();
+    file.close();
 
 }
 struct DNS_HEADER
@@ -103,7 +111,7 @@ struct DNS_HEADER
 
     char rcode :4; // response code
     char ad :1; // authenticated data
-    //char z :1; // its z! reserved
+//    char z :1; // its z! reserved
 
     short q_count; // number of question entries
     short ans_count; // number of answer entries
@@ -168,7 +176,7 @@ void ChangetoDnsNameFormat(char *dns, char *host){
 }
 
 void do_send(char* MSISDN,ip::udp::socket& sock){
-    char sendBuf[512];
+    char sendBuf[100];
     char *qname;
     char* host;
     int i;
@@ -193,9 +201,9 @@ void do_send(char* MSISDN,ip::udp::socket& sock){
     dns->aa = 0; //Not Authoritative
     dns->tc = 0; //This message is not truncated
     dns->rd = 1; //Recursion Desired
-//    dns->z = 0;
-    dns->ad = 1;
-    dns->rcode = 1;
+//    dns->z = 1;
+    dns->ad = 0;
+    dns->rcode = 0;
     dns->q_count = htons(1); //we have only 1 question
     dns->ans_count = 0;
     dns->auth_count = 0;
@@ -235,7 +243,7 @@ char* ReadName(char* reader,char* buffer,int* count)
 }
 
 int do_recv(ip::udp::socket& sock){
-    char recvBuf[1024];
+    char recvBuf[512];
     ip::udp::endpoint sender_ep;
     int bytes = 0;
     while(bytes==0){
@@ -254,30 +262,38 @@ int do_recv(ip::udp::socket& sock){
     answers.rdata = ReadName(reader,recvBuf,&stop);
     reader = reader + stop;
     char* ident=answers.rdata+(strlen((char*)answers.rdata)-3);
-    char* mtsIdent="01!";
-    if((strcmp((char*)ident,mtsIdent))==0){
+    string regex(answers.rdata);
+    vector<string> for_find_rn=split(regex,";");
+    std::string rn_val;
+    for(int i=0;i<for_find_rn.size();i++){
+        if(contains(for_find_rn.at(i),"rn=")){
+            rn_val=split(for_find_rn.at(i),"=").at(1);
+        }
+    }
+    char* mtsIdent="01";
+    if(contains(rn_val,"01")){
          return 1;
     }
     if(ntohs(dns->rcode)!=0){
         int n=ntohs(dns->rcode)/256;
         switch (n){
         case 1:
-            errCode=8;//",8,Query Format Error";
+            errCode=9;//",8,Query Format Error";
                 break;
         case 2:
-            errCode=8;//",8,Server failed to complete the DNS request";
+            errCode=9;//",8,Server failed to complete the DNS request";
                 break;
         case 3:
-            errCode=8;//",8,MSISDN does not exist";
+            errCode=9;//",8,MSISDN does not exist";
                 break;
         case 4:
-            errCode=8;//",8,Function not implemented";
+            errCode=9;//",8,Function not implemented";
             break;
         case 5:
-            errCode=8;//",8,The server refused to answer for the query";
+            errCode=9;//",8,The server refused to answer for the query";
             break;
         default:
-            errCode=9;//",9, MNP check error";
+            errCode=8;//",9, MNP check error";
             break;
         }
     }
@@ -288,13 +304,10 @@ int do_recv(ip::udp::socket& sock){
 int main(int argc, char* argv[]) {
     // connect several clients
     init();
-    ip::udp::socket sock(service, ip::udp::endpoint(ip::udp::v4(), 0) );
+    ip::udp::socket sock(service, ip::udp::endpoint(ip::udp::v4(), 53) );
     if(argc<2)
         return 2;
-    std::string msisdn=argv[1];
-    if(msisdn.empty())
-        return 1;
-    do_send((char*)msisdn.c_str(),sock);
+    do_send((char*)argv[1],sock);
     int recv=do_recv(sock);
     std::cout<<recv<<"\n";
     sock.close();
